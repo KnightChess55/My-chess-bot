@@ -36,7 +36,20 @@ const Remember = (() => {
   }
 
 
+
 function dialogue() {
+  const data = returning();
+
+  if (!data) return null;
+
+  return {
+    message: "Hey, it's you again. I remember that you tried to run away, huh? 😏",
+    previousMoves: data.history.length,
+    savedPosition: data.fen,
+    interruptedAt: data.savedAt
+  };
+}
+
   const data = returning();
 
   if (!data) return null;
