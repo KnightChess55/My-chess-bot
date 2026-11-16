@@ -35,5 +35,39 @@ const Remember = (() => {
     localStorage.removeItem(KEY);
   }
 
-  return { save, interrupt, returning, forgetActive };
+
+function dialogue() {
+  const data = returning();
+
+  if (!data) return null;
+
+  const interruptedFor = Date.now() - data.savedAt;
+  const minutes = Math.floor(interruptedFor / 60000);
+
+  let message;
+
+  if (minutes < 2) {
+    message = "Hey, it's you again. I remember that you tried to run away, huh? 😏";
+  } else if (minutes < 60) {
+    message = "Back already? I haven't forgotten our unfinished game.";
+  } else {
+    message = "You came back. I was wondering when you'd return.";
+  }
+
+  return {
+    message,
+    previousMoves: data.history.length,
+    savedPosition: data.fen,
+    interruptedAt: data.savedAt
+  };
+}
+
+return {
+  save,
+  interrupt,
+  returning,
+  forgetActive,
+  dialogue
+};
 })();
+
