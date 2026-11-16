@@ -233,14 +233,51 @@ function checkOver() {
   return true;
 }
 function review(key) {
-  const worst = userMoves.filter(m => m.drop > 0.5).sort((a, b) => b.drop - a.drop).slice(0, 3);
-  const shaky = botConf.slice().sort((a, b) => a.conf - b.conf)[0];
+  const worst = userMoves.filter(m => m.drop > 0.5)
+    .sort((a, b) => b.drop - a.drop).slice(0, 3);
+
+  const shaky = botConf.slice()
+    .sort((a, b) => a.conf - b.conf)[0];
+
   let t = "Post-game review\n";
-  t += worst.length ? "Your biggest mistakes:\n" + worst.map(m => `• Move ${m.num}: ${m.san} (cost about ${m.drop.toFixed(1)} pawns)`).join("\n")
-                    : "You made no clear mistakes that I noticed.";
-  if (shaky) t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
-  $("review").style.display = "block"; $("review").textContent = t;
-  const p = load(); p.games++; p[key]++; save(p); showProfile();
+
+  t += worst.length
+    ? "Your biggest mistakes:\n" + worst.map(m =>
+        `• Move ${m.num}: ${m.san} (cost about ${m.drop.toFixed(1)} pawns)`
+      ).join("\n")
+    : "You made no clear mistakes that I noticed.";
+
+  if (shaky) {
+    t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
+  }
+
+  $("review").style.display = "block";
+  $("review").textContent = t;
+
+  // Save the complete game
+  const record = {
+    id: Date.now(),
+    date: new Date().toISOString(),
+    result: key,
+    moves: game.history(),
+    pgn: game.pgn(),
+    finalFen: game.fen(),
+    evaluations: evals.slice(),
+    userMistakes: userMoves.map(m => ({...m})),
+    botConfidence: botConf.map(m => ({...m}))
+  };
+
+  const games = loadGames();
+  games.push(record);
+  saveGames(games);
+
+  const p = load();
+  p.games++;
+  p[key]++;
+  save(p);
+  showProfile();
+
+  console.log("Game saved:", record);
 }
 function load() { try { return Object.assign({ games: 0, bot: 0, user: 0, draw: 0 }, JSON.parse(localStorage.getItem("sachess") || "{}")); } catch (e) { return { games: 0, bot: 0, user: 0, draw: 0 }; } }
 function save(p) { try { localStorage.setItem("sachess", JSON.stringify(p)); } catch (e) {} }
