@@ -324,7 +324,16 @@ function newGame() {
   $("spark").innerHTML = ""; render(); setStatus();
 }
 $("newgame").onclick = newGame;
-render(); showProfile(); initEngine();
+render();
+showProfile();
+
+const returningGame = Remember.dialogue();
+
+if (returningGame) {
+  $("thoughts").textContent = returningGame.message;
+}
+
+initEngine();
 </script>
 </body>
 </html>
