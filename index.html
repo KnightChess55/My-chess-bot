@@ -136,14 +136,46 @@ function onEngine(line) {
 }
 function confidence() {
   if (!A) return 0;
-  const ds = Object.keys(A.depths).map(Number).sort((a, b) => a - b).slice(-6);
-  const tops = ds.map(d => A.depths[d][1] && A.depths[d][1].mv).filter(Boolean);
+
+  const ds = Object.keys(A.depths)
+    .map(Number)
+    .sort((a, b) => a - b)
+    .slice(-6);
+
+  if (!ds.length) return 5;
+
+  const tops = ds
+    .map(d => A.depths[d][1]?.mv)
+    .filter(Boolean);
+
+  if (!tops.length) return 5;
+
   const changes = new Set(tops).size - 1;
+
   const fin = A.depths[ds[ds.length - 1]] || {};
-  let gap = fin[2] && fin[1] ? fin[1].raw - fin[2].raw : 9;
-  let c = 100 - changes * 18 - (gap < 0.15 ? 25 : gap < 0.4 ? 10 : 0);
-  const vals = ds.map(d => A.depths[d][1] && A.depths[d][1].raw).filter(v => v !== undefined);
-  if (vals.length > 1) c -= Math.min(20, (Math.max(...vals) - Math.min(...vals)) * 8);
+
+  let gap = 9;
+
+  if (fin[1] && fin[2]) {
+    gap = Math.abs(fin[1].raw - fin[2].raw);
+  }
+
+  let c = 100 - changes * 18;
+
+  if (gap < 0.15) c -= 25;
+  else if (gap < 0.4) c -= 10;
+
+  const vals = ds
+    .map(d => A.depths[d][1]?.raw)
+    .filter(Number.isFinite);
+
+  if (vals.length > 1) {
+    c -= Math.min(
+      20,
+      (Math.max(...vals) - Math.min(...vals)) * 8
+    );
+  }
+
   return Math.max(5, Math.min(99, Math.round(c)));
 }
 
@@ -153,12 +185,30 @@ function afterMove() {
   think();
 }
 function think() {
-  thinking = true; setStatus();
+  thinking = true;
+  setStatus();
+
   const moves = game.moves();
-  A = { depths: {}, forced: moves.length === 1 };
+
+  A = {
+    depths: {},
+    forced: moves.length === 1,
+    boosted: false
+  };
+
   let depth = +$("level").value;
-  A.boosted = false;
-  if (evals.length && -evals[evals.length - 1] < -1.5) { depth += 2; A.boosted = true; }
+
+  // Search deeper when the previous evaluation
+  // suggests the bot is in a difficult position.
+  if (evals.length > 0) {
+    const previous = evals[evals.length - 1];
+
+    if (Number.isFinite(previous) && previous < -1.5) {
+      depth += 2;
+      A.boosted = true;
+    }
+  }
+
   engine.postMessage("position fen " + game.fen());
   engine.postMessage("go depth " + depth);
 }
@@ -232,7 +282,22 @@ function checkOver() {
   review(key);
   return true;
 }
-function review(key) {
+function loadGames() {
+  try {
+    return JSON.parse(localStorage.getItem("sachess_games") || "[]");
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveGames(games) {
+  try {
+    localStorage.setItem("sachess_games", JSON.stringify(games));
+  } catch (e) {
+    console.warn("Could not save games:", e);
+  }
+}
+  function review(key) {
   const worst = userMoves.filter(m => m.drop > 0.5)
     .sort((a, b) => b.drop - a.drop).slice(0, 3);
 
