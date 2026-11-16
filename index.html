@@ -297,6 +297,91 @@ function saveGames(games) {
     console.warn("Could not save games:", e);
   }
 }
+  function analyzeGameForMemory(result) {
+  let score = 0;
+  const reasons = [];
+
+  const moves = game.history();
+  const mistakes = userMoves.filter(m =>
+    Number.isFinite(m.drop)
+  );
+
+  const biggestMistake = mistakes.reduce(
+    (max, m) => Math.max(max, m.drop),
+    0
+  );
+
+  const swings = evals.slice(1).map((v, i) =>
+    Math.abs(v - evals[i])
+  );
+
+  const biggestSwing = swings.reduce(
+    (max, v) => Math.max(max, v),
+    0
+  );
+
+  const uncertainMoves = botConf.filter(
+    m => m.conf < 45
+  ).length;
+
+  // Evaluate the game's significance
+
+  if (moves.length >= 50) {
+    score += 8;
+    reasons.push("Long and complex game");
+  }
+
+  if (biggestMistake >= 2) {
+    score += 15;
+    reasons.push("Major mistake worth studying");
+  }
+
+  if (biggestMistake >= 4) {
+    score += 10;
+    reasons.push("Severe tactical mistake");
+  }
+
+  if (biggestSwing >= 2) {
+    score += 15;
+    reasons.push("Major evaluation change");
+  }
+
+  if (biggestSwing >= 4) {
+    score += 10;
+    reasons.push("Unexpected change in position");
+  }
+
+  if (uncertainMoves >= 2) {
+    score += 12;
+    reasons.push("Several difficult decisions");
+  }
+
+  if (result === "draw" && moves.length >= 60) {
+    score += 8;
+    reasons.push("Long drawn game");
+  }
+
+  score = Math.min(100, score);
+
+  let level = "normal";
+
+  if (score >= 65) {
+    level = "core";
+  } else if (score >= 35) {
+    level = "important";
+  }
+
+  if (!reasons.length) {
+    reasons.push("No unusually significant events detected");
+  }
+
+  return {
+    score,
+    level,
+    reasons,
+    analyzedAt: new Date().toISOString()
+  };
+}
   function review(key) {
   const worst = userMoves.filter(m => m.drop > 0.5)
     .sort((a, b) => b.drop - a.drop).slice(0, 3);
@@ -316,11 +401,46 @@ function saveGames(games) {
     t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
   }
 
-  $("review").style.display = "block";
-  $("review").textContent = t;
+const memory = analyzeGameForMemory(key);
+
+t += `\n\nMy memory decision: ${memory.level.toUpperCase()}`;
+t += `\nImportance score: ${memory.score}/100`;
+t += "\nReasons:";
+t += "\n" + memory.reasons.map(r => "• " + r).join("\n");
+
+$("review").style.display = "block";
+$("review").textContent = t;
 
   // Save the complete game
-  const record = {
+  // The bot independently evaluates its experience
+const memory = analyzeGameForMemory(key);
+
+// Save the complete game and its memory decision
+const record = {
+  id: Date.now(),
+  date: new Date().toISOString(),
+  result: key,
+
+  moves: game.history(),
+  pgn: game.pgn(),
+  finalFen: game.fen(),
+
+  evaluations: evals.slice(),
+  userMistakes: userMoves.map(m => ({...m})),
+  botConfidence: botConf.map(m => ({...m})),
+
+  importance: memory.score,
+  memoryLevel: memory.level,
+  memoryReasons: memory.reasons,
+  memoryAnalyzedAt: memory.analyzedAt
+};
+
+const games = loadGames();
+games.push(record);
+saveGames(games);
+
+console.log("My memory decision:", memory);
+console.log("Saved game:", record);
     id: Date.now(),
     date: new Date().toISOString(),
     result: key,
