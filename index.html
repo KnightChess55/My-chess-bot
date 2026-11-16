@@ -1,1 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Self-Aware Chess Bot</title>
+<style>
+:root{--bg:#e8ebf2;--ink:#1d2433;--light:#dde4f0;--dark:#5d7099;--accent:#f0a82c;--panel:#f7f8fb;--line:#c5ccdc}
+@media(prefers-color-scheme:dark){:root{--bg:#161b27;--ink:#e6e9f1;--light:#cfd7e8;--dark:#4a5b82;--panel:#1f2636;--line:#33405c}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:980px;margin:0 auto;padding:16px;display:flex;flex-wrap:wrap;gap:20px;justify-content:center}
+h1{font:italic 700 26px/1.2 Georgia,serif;margin:0 0 4px}
+.left{flex:0 0 auto;width:min(92vw,480px)}
+.right{flex:1 1 300px;min-width:280px;max-width:480px;display:flex;flex-direction:column;gap:12px}
+#board{display:grid;grid-template-columns:repeat(8,1fr);width:100%;aspect-ratio:1;border:3px solid var(--ink);border-radius:4px;overflow:hidden;user-select:none}
+.sq{display:flex;align-items:center;justify-content:center;font-size:min(9vw,46px);cursor:pointer;position:relative;line-height:1}
+.sq.l{background:var(--light)}.sq.d{background:var(--dark)}
+.sq.last{box-shadow:inset 0 0 0 100px rgba(240,168,44,.35)}
+.sq.sel{box-shadow:inset 0 0 0 4px var(--accent)}
+.sq.tgt::after{content:"";width:28%;height:28%;border-radius:50%;background:rgba(29,36,51,.35);position:absolute}
+.w{color:#fff;text-shadow:0 0 2px #000,0 0 2px #000,0 1px 3px #000}
+.b{color:#141824;text-shadow:0 0 1px #fff}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px}
+.panel h2{font-size:14px;margin:0 0 8px;font-weight:700}
+#thoughts{font:italic 16px/1.55 Georgia,serif;min-height:96px;margin:0}
+.meter{height:14px;background:var(--line);border-radius:7px;overflow:hidden}
+#fill{height:100%;width:0;background:var(--accent);transition:width .25s}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:center;margin-top:6px;font-size:13px}
+button,select{font:inherit;padding:6px 12px;border:1px solid var(--ink);background:var(--panel);color:var(--ink);border-radius:4px;cursor:pointer}
+button:focus-visible,select:focus-visible,.sq:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#status{margin:8px 0;font-weight:600;min-height:22px}
+svg{width:100%;height:60px;display:block}
+#review{display:none;white-space:pre-line}
+small{color:inherit;opacity:.7}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="left">
+    <h1>Self-Aware Chess Bot</h1>
+    <div id="status">Loading engine…</div>
+    <div id="board" role="grid" aria-label="Chess board"></div>
+    <div class="row" style="margin-top:10px">
+      <span>You play white.</span>
+      <span>
+        <select id="level" aria-label="Difficulty">
+          <option value="4">Easy</option>
+          <option value="8" selected>Medium</option>
+          <option value="14">Hard</option>
+        </select>
+        <button id="newgame">New game</button>
+      </span>
+    </div>
+  </div>
+  <div class="right">
+    <div class="panel"><h2>What I’m thinking</h2><p id="thoughts">Make your move and I’ll tell you what I make of it.</p></div>
+    <div class="panel">
+      <h2>My confidence</h2>
+      <div class="meter"><div id="fill"></div></div>
+      <div class="row"><span id="confTxt">–</span><span id="evalTxt">Eval: –</span></div>
+    </div>
+    <div class="panel"><h2>How the game is going (my view)</h2><svg id="spark" viewBox="0 0 300 60" preserveAspectRatio="none"></svg></div>
+    <div class="panel" id="review"></div>
+    <div class="panel"><h2>About me</h2><small id="profile"></small></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/chess.js/0.10.3/chess.min.js"></script>
+<script>
+const SF_URL = "https://cdnjs.cloudflare.com/ajax/libs/stockfish.js/10.0.2/stockfish.js";
+const GLYPH = {k:"♚",q:"♛",r:"♜",b:"♝",n:"♞",p:"♟"};
+const $ = id => document.getElementById(id);
+
+let game = new Chess(), sel = null, targets = [], last = null;
+let engine = null, ready = false, A = null, thinking = false, over = false;
+let evals = [], userMoves = [], botConf = [], prevEval = 0, pending = null;
+
+/* ---------- board ---------- */
+function render() {
+  const el = $("board"); el.innerHTML = "";
+  const b = game.board();
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const name = "abcdefgh"[c] + (8 - r), p = b[r][c];
+    const d = document.createElement("div");
+    d.className = "sq " + ((r + c) % 2 ? "d" : "l");
+    if (last && (last.from === name || last.to === name)) d.classList.add("last");
+    if (sel === name) d.classList.add("sel");
+    if (targets.includes(name)) d.classList.add("tgt");
+    if (p) { d.textContent = GLYPH[p.type] + "\uFE0E"; d.classList.add(p.color); }
+    d.tabIndex = 0; d.setAttribute("aria-label", name + (p ? " " + p.color + p.type : ""));
+    d.onclick = () => clickSq(name);
+    d.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); clickSq(name); } };
+    el.appendChild(d);
+  }
+}
+function clickSq(name) {
+  if (over || thinking || !ready || game.turn() !== "w") return;
+  if (sel && targets.includes(name)) {
+    const m = game.move({ from: sel, to: name, promotion: "q" });
+    pending = m.san; last = m; sel = null; targets = [];
+    render(); afterMove();
+    return;
+  }
+  const p = game.get(name);
+  if (p && p.color === "w") {
+    sel = name; targets = game.moves({ square: name, verbose: true }).map(m => m.to);
+  } else { sel = null; targets = []; }
+  render();
+}
+
+/* ---------- engine ---------- */
+async function initEngine() {
+  try {
+    const txt = await (await fetch(SF_URL)).text();
+    engine = new Worker(URL.createObjectURL(new Blob([txt], { type: "application/javascript" })));
+    engine.onmessage = e => onEngine(String(e.data));
+    engine.postMessage("uci");
+  } catch (err) {
+    $("status").textContent = "Couldn’t load the engine. Check your connection and refresh.";
+  }
+}
+function onEngine(line) {
+  if (line === "uciok") { engine.postMessage("setoption name MultiPV value 3"); engine.postMessage("isready"); }
+  else if (line === "readyok") { ready = true; setStatus(); }
+  else if (line.startsWith("info") && line.includes(" pv ") && A) {
+    const d = +(line.match(/ depth (\d+)/) || [])[1], mp = +((line.match(/ multipv (\d+)/) || [])[1] || 1);
+    const s = line.match(/score (cp|mate) (-?\d+)/);
+    if (!d || !s) return;
+    const n = +s[2], raw = s[1] === "cp" ? n / 100 : (n > 0 ? 1 : -1) * 30;
+    const mv = line.split(" pv ")[1].split(" ")[0];
+    (A.depths[d] = A.depths[d] || {})[mp] = { mv, raw, mate: s[1] === "mate" ? n : null };
+    if (mp === 1) { A.lastDepth = d; $("fill").style.width = confidence() + "%"; }
+  }
+  else if (line.startsWith("bestmove") && A) finishThink(line.split(" ")[1]);
+}
+function confidence() {
+  if (!A) return 0;
+  const ds = Object.keys(A.depths).map(Number).sort((a, b) => a - b).slice(-6);
+  const tops = ds.map(d => A.depths[d][1] && A.depths[d][1].mv).filter(Boolean);
+  const changes = new Set(tops).size - 1;
+  const fin = A.depths[ds[ds.length - 1]] || {};
+  let gap = fin[2] && fin[1] ? fin[1].raw - fin[2].raw : 9;
+  let c = 100 - changes * 18 - (gap < 0.15 ? 25 : gap < 0.4 ? 10 : 0);
+  const vals = ds.map(d => A.depths[d][1] && A.depths[d][1].raw).filter(v => v !== undefined);
+  if (vals.length > 1) c -= Math.min(20, (Math.max(...vals) - Math.min(...vals)) * 8);
+  return Math.max(5, Math.min(99, Math.round(c)));
+}
+
+/* ---------- turns ---------- */
+function afterMove() {
+  if (checkOver()) return;
+  think();
+}
+function think() {
+  thinking = true; setStatus();
+  const moves = game.moves();
+  A = { depths: {}, forced: moves.length === 1 };
+  let depth = +$("level").value;
+  A.boosted = false;
+  if (evals.length && -evals[evals.length - 1] < -1.5) { depth += 2; A.boosted = true; }
+  engine.postMessage("position fen " + game.fen());
+  engine.postMessage("go depth " + depth);
+}
+function fmt(v) { return (v > 0 ? "+" : "") + v.toFixed(1); }
+function finishThink(mv) {
+  const ds = Object.keys(A.depths).map(Number).sort((a, b) => a - b);
+  const fin = A.depths[ds[ds.length - 1]][1];
+  const E = -fin.raw;                       // engine is black: convert to white's view
+  const conf = A.forced ? 100 : confidence();
+  const botEval = fin.raw;
+
+  // judge the user's last move from how my eval changed
+  let userNote = "";
+  if (pending) {
+    const drop = prevEval - E;              // pawns the user lost with that move
+    userMoves.push({ san: pending, drop, num: Math.ceil(game.history().length / 2) });
+    if (drop > 2) userNote = `Your ${pending} was a blunder, by my count you lost about ${drop.toFixed(1)} pawns. `;
+    else if (drop > 1) userNote = `Your ${pending} looks like a mistake. `;
+    else if (drop > 0.5) userNote = `${pending} was a little inaccurate. `;
+    else if (drop < -0.5) userNote = `Nice, ${pending} was better than I expected. `;
+    else userNote = `${pending} was fine. `;
+    pending = null;
+  }
+  prevEval = E; evals.push(E); botConf.push({ conf, num: Math.ceil((game.history().length + 1) / 2) });
+
+  const m = game.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || "q" });
+  last = m; render();
+
+  let t = userNote + `I played ${m.san}. `;
+  if (A.forced) t += "It was my only legal move, so no doubt there. ";
+  else if (conf >= 80) t += "I’m confident here: my choice stayed the same as I looked deeper. ";
+  else if (conf >= 50) t += "I’m moderately sure. A couple of moves looked close. ";
+  else t += "I’m unsure. My preferred move kept changing as I searched, so treat this as a guess. ";
+  if (botEval > 1.5) t += "I feel like I’m winning.";
+  else if (botEval < -1.5) t += "I think I’m losing, so I’m thinking harder (deeper search) for the next move.";
+  else t += "The position feels roughly balanced to me.";
+  if (A.boosted) t += " (I searched deeper this move because I was behind.)";
+  $("thoughts").textContent = t;
+  $("confTxt").textContent = `Confidence: ${conf}%`;
+  $("fill").style.width = conf + "%";
+  $("evalTxt").textContent = "Eval (white): " + (fin.mate !== null ? "mate" : fmt(E));
+  spark();
+  thinking = false; A = null;
+  if (!checkOver()) setStatus();
+}
+function spark() {
+  const pts = evals.map((v, i) => {
+    const x = evals.length === 1 ? 150 : (i / (evals.length - 1)) * 300;
+    const y = 30 - Math.max(-5, Math.min(5, -v)) * 5.4;   // up = good for me (black)
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+  $("spark").innerHTML = `<line x1="0" y1="30" x2="300" y2="30" stroke="currentColor" opacity=".3" stroke-dasharray="3"/><polyline points="${pts}" fill="none" stroke="#f0a82c" stroke-width="2.5" vector-effect="non-scaling-stroke"/>`;
+}
+function setStatus() {
+  let s;
+  if (!ready) s = "Loading engine…";
+  else if (over) return;
+  else if (thinking) s = "Thinking…";
+  else s = game.in_check() ? "Your move. You’re in check." : "Your move.";
+  $("status").textContent = s;
+}
+
+/* ---------- ending, review, profile ---------- */
+function checkOver() {
+  if (!game.game_over()) return false;
+  over = true; thinking = false;
+  let res, key;
+  if (game.in_checkmate()) { res = game.turn() === "w" ? "Checkmate. I win." : "Checkmate. You win!"; key = game.turn() === "w" ? "bot" : "user"; }
+  else { res = "Draw."; key = "draw"; }
+  $("status").textContent = res;
+  review(key);
+  return true;
+}
+function review(key) {
+  const worst = userMoves.filter(m => m.drop > 0.5).sort((a, b) => b.drop - a.drop).slice(0, 3);
+  const shaky = botConf.slice().sort((a, b) => a.conf - b.conf)[0];
+  let t = "Post-game review\n";
+  t += worst.length ? "Your biggest mistakes:\n" + worst.map(m => `• Move ${m.num}: ${m.san} (cost about ${m.drop.toFixed(1)} pawns)`).join("\n")
+                    : "You made no clear mistakes that I noticed.";
+  if (shaky) t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
+  $("review").style.display = "block"; $("review").textContent = t;
+  const p = load(); p.games++; p[key]++; save(p); showProfile();
+}
+function load() { try { return Object.assign({ games: 0, bot: 0, user: 0, draw: 0 }, JSON.parse(localStorage.getItem("sachess") || "{}")); } catch (e) { return { games: 0, bot: 0, user: 0, draw: 0 }; } }
+function save(p) { try { localStorage.setItem("sachess", JSON.stringify(p)); } catch (e) {} }
+function showProfile() {
+  const p = load();
+  $("profile").textContent = p.games
+    ? `I’ve played ${p.games} game${p.games > 1 ? "s" : ""} here on this device: I won ${p.bot}, you won ${p.user}, ${p.draw} drawn.`
+    : "I haven’t finished a game on this device yet. I track my own confidence and judge your moves by how my evaluation shifts.";
+}
+function newGame() {
+  game = new Chess(); sel = null; targets = []; last = null; over = false; thinking = false; A = null;
+  evals = []; userMoves = []; botConf = []; prevEval = 0; pending = null;
+  if (engine) engine.postMessage("stop");
+  $("review").style.display = "none"; $("fill").style.width = "0"; $("confTxt").textContent = "–"; $("evalTxt").textContent = "Eval: –";
+  $("thoughts").textContent = "Make your move and I’ll tell you what I make of it.";
+  $("spark").innerHTML = ""; render(); setStatus();
+}
+$("newgame").onclick = newGame;
+render(); showProfile(); initEngine();
+</script>
+</body>
+</html>
 
