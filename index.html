@@ -125,7 +125,9 @@ function clickSq(name) {
   if (sel && targets.includes(name)) {
     const m = game.move({ from: sel, to: name, promotion: "q" });
     pending = m.san; last = m; sel = null; targets = [];
-    render(); afterMove();
+render();
+saveCurrentGame();
+afterMove();
     return;
   }
   const p = game.get(name);
@@ -150,7 +152,14 @@ async function initEngine() {
 }
 function onEngine(line) {
   if (line === "uciok") { engine.postMessage("setoption name MultiPV value 3"); engine.postMessage("isready"); }
-  else if (line === "readyok") { ready = true; setStatus(); }
+else if (line === "readyok") {
+  ready = true;
+  setStatus();
+
+  if (!over && game.turn() === "b") {
+    think();
+  }
+}
   else if (line.startsWith("info") && line.includes(" pv ") && A) {
     const d = +(line.match(/ depth (\d+)/) || [])[1], mp = +((line.match(/ multipv (\d+)/) || [])[1] || 1);
     const s = line.match(/score (cp|mate) (-?\d+)/);
@@ -213,7 +222,9 @@ function finishThink(mv) {
   prevEval = E; evals.push(E); botConf.push({ conf, num: Math.ceil((game.history().length + 1) / 2) });
 
   const m = game.move({ from: mv.slice(0, 2), to: mv.slice(2, 4), promotion: mv[4] || "q" });
-  last = m; render();
+last = m;
+render();
+saveCurrentGame();
 
   let t = userNote + `I played ${m.san}. `;
   if (A.forced) t += "It was my only legal move, so no doubt there. ";
@@ -258,6 +269,7 @@ function checkOver() {
   else { res = "Draw."; key = "draw"; }
   $("status").textContent = res;
   review(key);
+  Remember.complete();
   return true;
 }
 function loadGames() { try { return JSON.parse(localStorage.getItem("sachess_games") || "[]"); } catch (e) { return []; } }
@@ -315,7 +327,8 @@ function showProfile() {
     ? `I’ve played ${p.games} game${p.games > 1 ? "s" : ""} here on this device: I won ${p.bot}, you won ${p.user}, ${p.draw} drawn.`
     : "I haven’t finished a game on this device yet. I track my own confidence and judge your moves by how my evaluation shifts.";
 }
-function newGame() {
+Remember.forgetActive(); 
+  function newGame() {
   game = new Chess(); sel = null; targets = []; last = null; over = false; thinking = false; A = null;
   evals = []; userMoves = []; botConf = []; prevEval = 0; pending = null;
   if (engine) engine.postMessage("stop");
@@ -327,11 +340,55 @@ $("newgame").onclick = newGame;
 render();
 showProfile();
 
-const returningGame = Remember.dialogue();
+const restored = restoreInterruptedGame();
+
+if (!restored) {
+  const returningGame = Remember.dialogue();
+
+  if (returningGame) {
+    $("thoughts").textContent = returningGame.message;
+  }
+}
+
+initEngine();
 
 if (returningGame) {
   $("thoughts").textContent = returningGame.message;
 }
+window.addEventListener("pagehide", () => {
+  Remember.interrupt();
+});
+
+function restoreInterruptedGame() {
+  const data = Remember.returning();
+
+  if (!data) return false;
+
+  const loaded = game.load_pgn(data.pgn);
+
+  if (!loaded) return false;
+
+  const extra = data.extra || {};
+
+  evals = extra.evals || [];
+  userMoves = extra.userMoves || [];
+  botConf = extra.botConf || [];
+  prevEval = extra.prevEval || 0;
+
+  const history = game.history({ verbose: true });
+  last = history.length ? history[history.length - 1] : null;
+
+  Remember.markResumed();
+
+  render();
+  spark();
+
+  $("thoughts").textContent =
+    "You came back. I remember our unfinished game. Let's continue. 😏";
+
+  return true;
+}
+
 
 initEngine();
 </script>
