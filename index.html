@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title> Chess Bot</title>
+<title>Chess Bot</title>
 <style>
 :root{--bg:#e8ebf2;--ink:#1d2433;--light:#dde4f0;--dark:#5d7099;--accent:#f0a82c;--panel:#f7f8fb;--line:#c5ccdc}
 @media(prefers-color-scheme:dark){:root{--bg:#161b27;--ink:#e6e9f1;--light:#cfd7e8;--dark:#4a5b82;--panel:#1f2636;--line:#33405c}}
@@ -115,7 +115,9 @@ async function initEngine() {
     const txt = await (await fetch(SF_URL)).text();
     engine = new Worker(URL.createObjectURL(new Blob([txt], { type: "application/javascript" })));
     engine.onmessage = e => onEngine(String(e.data));
+    engine.onerror = e => { $("status").textContent = "Engine error: " + (e.message || "failed to start"); };
     engine.postMessage("uci");
+    setTimeout(() => { if (!ready) $("status").textContent = "Engine is taking too long. Refresh, or try another network."; }, 25000);
   } catch (err) {
     $("status").textContent = "Couldn’t load the engine. Check your connection and refresh.";
   }
@@ -136,46 +138,14 @@ function onEngine(line) {
 }
 function confidence() {
   if (!A) return 0;
-
-  const ds = Object.keys(A.depths)
-    .map(Number)
-    .sort((a, b) => a - b)
-    .slice(-6);
-
-  if (!ds.length) return 5;
-
-  const tops = ds
-    .map(d => A.depths[d][1]?.mv)
-    .filter(Boolean);
-
-  if (!tops.length) return 5;
-
+  const ds = Object.keys(A.depths).map(Number).sort((a, b) => a - b).slice(-6);
+  const tops = ds.map(d => A.depths[d][1] && A.depths[d][1].mv).filter(Boolean);
   const changes = new Set(tops).size - 1;
-
   const fin = A.depths[ds[ds.length - 1]] || {};
-
-  let gap = 9;
-
-  if (fin[1] && fin[2]) {
-    gap = Math.abs(fin[1].raw - fin[2].raw);
-  }
-
-  let c = 100 - changes * 18;
-
-  if (gap < 0.15) c -= 25;
-  else if (gap < 0.4) c -= 10;
-
-  const vals = ds
-    .map(d => A.depths[d][1]?.raw)
-    .filter(Number.isFinite);
-
-  if (vals.length > 1) {
-    c -= Math.min(
-      20,
-      (Math.max(...vals) - Math.min(...vals)) * 8
-    );
-  }
-
+  let gap = fin[2] && fin[1] ? fin[1].raw - fin[2].raw : 9;
+  let c = 100 - changes * 18 - (gap < 0.15 ? 25 : gap < 0.4 ? 10 : 0);
+  const vals = ds.map(d => A.depths[d][1] && A.depths[d][1].raw).filter(v => v !== undefined);
+  if (vals.length > 1) c -= Math.min(20, (Math.max(...vals) - Math.min(...vals)) * 8);
   return Math.max(5, Math.min(99, Math.round(c)));
 }
 
@@ -185,30 +155,12 @@ function afterMove() {
   think();
 }
 function think() {
-  thinking = true;
-  setStatus();
-
+  thinking = true; setStatus();
   const moves = game.moves();
-
-  A = {
-    depths: {},
-    forced: moves.length === 1,
-    boosted: false
-  };
-
+  A = { depths: {}, forced: moves.length === 1 };
   let depth = +$("level").value;
-
-  // Search deeper when the previous evaluation
-  // suggests the bot is in a difficult position.
-  if (evals.length > 0) {
-    const previous = evals[evals.length - 1];
-
-    if (Number.isFinite(previous) && previous < -1.5) {
-      depth += 2;
-      A.boosted = true;
-    }
-  }
-
+  A.boosted = false;
+  if (evals.length && -evals[evals.length - 1] < -1.5) { depth += 2; A.boosted = true; }
   engine.postMessage("position fen " + game.fen());
   engine.postMessage("go depth " + depth);
 }
@@ -282,187 +234,52 @@ function checkOver() {
   review(key);
   return true;
 }
-function loadGames() {
-  try {
-    return JSON.parse(localStorage.getItem("sachess_games") || "[]");
-  } catch (e) {
-    return [];
-  }
-}
+function loadGames() { try { return JSON.parse(localStorage.getItem("sachess_games") || "[]"); } catch (e) { return []; } }
+function saveGames(g) { try { localStorage.setItem("sachess_games", JSON.stringify(g.slice(-30))); } catch (e) {} }
 
-function saveGames(games) {
-  try {
-    localStorage.setItem("sachess_games", JSON.stringify(games));
-  } catch (e) {
-    console.warn("Could not save games:", e);
-  }
-}
-  function analyzeGameForMemory(result) {
-  let score = 0;
-  const reasons = [];
-
-  const moves = game.history();
-  const mistakes = userMoves.filter(m =>
-    Number.isFinite(m.drop)
-  );
-
-  const biggestMistake = mistakes.reduce(
-    (max, m) => Math.max(max, m.drop),
-    0
-  );
-
-  const swings = evals.slice(1).map((v, i) =>
-    Math.abs(v - evals[i])
-  );
-
-  const biggestSwing = swings.reduce(
-    (max, v) => Math.max(max, v),
-    0
-  );
-
-  const uncertainMoves = botConf.filter(
-    m => m.conf < 45
-  ).length;
-
-  // Evaluate the game's significance
-
-  if (moves.length >= 50) {
-    score += 8;
-    reasons.push("Long and complex game");
-  }
-
-  if (biggestMistake >= 2) {
-    score += 15;
-    reasons.push("Major mistake worth studying");
-  }
-
-  if (biggestMistake >= 4) {
-    score += 10;
-    reasons.push("Severe tactical mistake");
-  }
-
-  if (biggestSwing >= 2) {
-    score += 15;
-    reasons.push("Major evaluation change");
-  }
-
-  if (biggestSwing >= 4) {
-    score += 10;
-    reasons.push("Unexpected change in position");
-  }
-
-  if (uncertainMoves >= 2) {
-    score += 12;
-    reasons.push("Several difficult decisions");
-  }
-
-  if (result === "draw" && moves.length >= 60) {
-    score += 8;
-    reasons.push("Long drawn game");
-  }
-
+// The bot scores how significant a game was, using rules (not learning yet).
+function analyzeGameForMemory(result) {
+  let score = 0; const reasons = [];
+  const plies = game.history().length;
+  const biggestMistake = userMoves.reduce((mx, m) => Math.max(mx, m.drop), 0);
+  const biggestSwing = evals.slice(1).reduce((mx, v, i) => Math.max(mx, Math.abs(v - evals[i])), 0);
+  const uncertain = botConf.filter(m => m.conf < 45).length;
+  if (plies >= 50) { score += 8; reasons.push("Long and complex game"); }
+  if (biggestMistake >= 2) { score += 15; reasons.push("Major mistake worth studying"); }
+  if (biggestMistake >= 4) { score += 10; reasons.push("Severe tactical mistake"); }
+  if (biggestSwing >= 2) { score += 15; reasons.push("Major evaluation change"); }
+  if (biggestSwing >= 4) { score += 10; reasons.push("Unexpected change in position"); }
+  if (uncertain >= 2) { score += 12; reasons.push("Several difficult decisions"); }
+  if (result === "draw" && plies >= 60) { score += 8; reasons.push("Long drawn game"); }
   score = Math.min(100, score);
-
-  let level = "normal";
-
-  if (score >= 65) {
-    level = "core";
-  } else if (score >= 35) {
-    level = "important";
-  }
-
-  if (!reasons.length) {
-    reasons.push("No unusually significant events detected");
-  }
-
-  return {
-    score,
-    level,
-    reasons,
-    analyzedAt: new Date().toISOString()
-  };
+  const level = score >= 65 ? "core" : score >= 35 ? "important" : "normal";
+  if (!reasons.length) reasons.push("Nothing unusually significant");
+  return { score, level, reasons, analyzedAt: new Date().toISOString() };
 }
-  function review(key) {
-  const worst = userMoves.filter(m => m.drop > 0.5)
-    .sort((a, b) => b.drop - a.drop).slice(0, 3);
 
-  const shaky = botConf.slice()
-    .sort((a, b) => a.conf - b.conf)[0];
+function review(key) {
+  const worst = userMoves.filter(m => m.drop > 0.5).sort((a, b) => b.drop - a.drop).slice(0, 3);
+  const shaky = botConf.slice().sort((a, b) => a.conf - b.conf)[0];
+  const memory = analyzeGameForMemory(key);
 
   let t = "Post-game review\n";
-
   t += worst.length
-    ? "Your biggest mistakes:\n" + worst.map(m =>
-        `• Move ${m.num}: ${m.san} (cost about ${m.drop.toFixed(1)} pawns)`
-      ).join("\n")
+    ? "Your biggest mistakes:\n" + worst.map(m => `• Move ${m.num}: ${m.san} (cost about ${m.drop.toFixed(1)} pawns)`).join("\n")
     : "You made no clear mistakes that I noticed.";
-
-  if (shaky) {
-    t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
-  }
-
-const memory = analyzeGameForMemory(key);
-
-t += `\n\nMy memory decision: ${memory.level.toUpperCase()}`;
-t += `\nImportance score: ${memory.score}/100`;
-t += "\nReasons:";
-t += "\n" + memory.reasons.map(r => "• " + r).join("\n");
-
-$("review").style.display = "block";
-$("review").textContent = t;
-
-  // Save the complete game
-  // The bot independently evaluates its experience
-const memory = analyzeGameForMemory(key);
-
-// Save the complete game and its memory decision
-const record = {
-  id: Date.now(),
-  date: new Date().toISOString(),
-  result: key,
-
-  moves: game.history(),
-  pgn: game.pgn(),
-  finalFen: game.fen(),
-
-  evaluations: evals.slice(),
-  userMistakes: userMoves.map(m => ({...m})),
-  botConfidence: botConf.map(m => ({...m})),
-
-  importance: memory.score,
-  memoryLevel: memory.level,
-  memoryReasons: memory.reasons,
-  memoryAnalyzedAt: memory.analyzedAt
-};
-
-const games = loadGames();
-games.push(record);
-saveGames(games);
-
-console.log("My memory decision:", memory);
-console.log("Saved game:", record);
-    id: Date.now(),
-    date: new Date().toISOString(),
-    result: key,
-    moves: game.history(),
-    pgn: game.pgn(),
-    finalFen: game.fen(),
-    evaluations: evals.slice(),
-    userMistakes: userMoves.map(m => ({...m})),
-    botConfidence: botConf.map(m => ({...m}))
-  };
+  if (shaky) t += `\nMy shakiest decision was on move ${shaky.num}, where I was only ${shaky.conf}% confident.`;
+  t += `\n\nHow memorable was this game? ${memory.level} (${memory.score}/100)\n` + memory.reasons.map(r => "• " + r).join("\n");
+  $("review").style.display = "block"; $("review").textContent = t;
 
   const games = loadGames();
-  games.push(record);
+  games.push({
+    id: Date.now(), date: new Date().toISOString(), result: key,
+    pgn: game.pgn(), finalFen: game.fen(),
+    evaluations: evals.slice(), userMistakes: userMoves.map(m => ({ ...m })), botConfidence: botConf.map(m => ({ ...m })),
+    importance: memory.score, memoryLevel: memory.level, memoryReasons: memory.reasons
+  });
   saveGames(games);
 
-  const p = load();
-  p.games++;
-  p[key]++;
-  save(p);
-  showProfile();
-
-  console.log("Game saved:", record);
+  const p = load(); p.games++; p[key]++; save(p); showProfile();
 }
 function load() { try { return Object.assign({ games: 0, bot: 0, user: 0, draw: 0 }, JSON.parse(localStorage.getItem("sachess") || "{}")); } catch (e) { return { games: 0, bot: 0, user: 0, draw: 0 }; } }
 function save(p) { try { localStorage.setItem("sachess", JSON.stringify(p)); } catch (e) {} }
@@ -485,4 +302,3 @@ render(); showProfile(); initEngine();
 </script>
 </body>
 </html>
-
